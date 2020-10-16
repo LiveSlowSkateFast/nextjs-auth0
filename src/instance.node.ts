@@ -1,44 +1,42 @@
-import handlers from './handlers';
-import getClient from './utils/oidc-client';
-import IAuth0Settings from './settings';
-import { ISignInWithAuth0 } from './instance';
-import { ISessionStore } from './session/store';
-import CookieSessionStore from './session/cookie-store';
-import CookieSessionStoreSettings from './session/cookie-store/settings';
+import {
+  ConfigParameters,
+  getConfig,
+  CookieStore,
+  TransientCookieHandler,
+  loginHandler,
+  logoutHandler,
+  callbackHandler,
+  clientFactory
+} from './auth0-session';
+import { profileHandler, sessionHandler, requireAuthentication, tokenCache } from './handlers';
+import { NextApiRequest, NextApiResponse } from 'next';
+import onHeaders from 'on-headers';
 
-export default function createInstance(settings: IAuth0Settings): ISignInWithAuth0 {
-  if (!settings.domain) {
-    throw new Error('A valid Auth0 Domain must be provided');
-  }
+export default function createInstance(params: ConfigParameters) {
+  const config = getConfig(params);
+  const getClient = clientFactory(config);
+  const transientHandler = new TransientCookieHandler(config);
+  const cookieStore = new CookieStore(config, getClient);
+  const sessionCache = new WeakMap();
 
-  if (!settings.clientId) {
-    throw new Error('A valid Auth0 Client ID must be provided');
-  }
+  const wrap = (fn: Function) => (req: NextApiRequest, res: NextApiResponse, ...args: any) => {
+    sessionCache.set(req, cookieStore.read(req));
+    onHeaders(res, () => cookieStore.save(req, res, sessionCache.get(req)));
+    return fn(req, res, ...args);
+  };
 
-  if (!settings.clientSecret) {
-    throw new Error('A valid Auth0 Client Secret must be provided');
-  }
-
-  if (!settings.session) {
-    throw new Error('The session configuration is required');
-  }
-
-  if (!settings.session.cookieSecret) {
-    throw new Error('A valid session cookie secret is required');
-  }
-
-  const clientProvider = getClient(settings);
-
-  const sessionSettings = new CookieSessionStoreSettings(settings.session);
-  const store: ISessionStore = new CookieSessionStore(sessionSettings);
+  const wrapReadOnly = (fn: Function) => (req: NextApiRequest, ...args: any) => {
+    sessionCache.set(req, cookieStore.read(req));
+    return fn(req, ...args);
+  };
 
   return {
-    handleLogin: handlers.LoginHandler(settings, clientProvider),
-    handleLogout: handlers.LogoutHandler(settings, sessionSettings, clientProvider, store),
-    handleCallback: handlers.CallbackHandler(settings, clientProvider, store),
-    handleProfile: handlers.ProfileHandler(store, clientProvider),
-    getSession: handlers.SessionHandler(store),
-    requireAuthentication: handlers.RequireAuthentication(store),
-    tokenCache: handlers.TokenCache(clientProvider, store)
+    handleLogin: loginHandler(config, getClient, transientHandler),
+    handleLogout: wrap(logoutHandler(config, getClient, sessionCache)),
+    handleCallback: wrap(callbackHandler(config, getClient, sessionCache, transientHandler)),
+    handleProfile: wrap(profileHandler(sessionCache, getClient)),
+    getSession: wrapReadOnly(sessionHandler(sessionCache)),
+    requireAuthentication: wrap(requireAuthentication(sessionCache)),
+    tokenCache: wrapReadOnly(tokenCache(config, sessionCache))
   };
 }

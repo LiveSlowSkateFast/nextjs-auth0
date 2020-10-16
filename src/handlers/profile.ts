@@ -1,14 +1,11 @@
 import { NextApiResponse, NextApiRequest } from 'next';
-
-import tokenCacheHandler from './token-cache';
-import { ISessionStore } from '../session/store';
-import { IOidcClientFactory } from '../utils/oidc-client';
+import { ClientFactory, SessionCache } from '../auth0-session';
 
 export type ProfileOptions = {
   refetch?: boolean;
 };
 
-export default function profileHandler(sessionStore: ISessionStore, clientProvider: IOidcClientFactory) {
+export default function profileHandler(sessionCache: SessionCache, getClient: ClientFactory) {
   return async (req: NextApiRequest, res: NextApiResponse, options?: ProfileOptions): Promise<void> => {
     if (!req) {
       throw new Error('Request is not available');
@@ -18,7 +15,7 @@ export default function profileHandler(sessionStore: ISessionStore, clientProvid
       throw new Error('Response is not available');
     }
 
-    const session = await sessionStore.read(req);
+    const session = await sessionCache.get(req);
     if (!session || !session.user) {
       res.status(401).json({
         error: 'not_authenticated',
@@ -28,26 +25,17 @@ export default function profileHandler(sessionStore: ISessionStore, clientProvid
     }
 
     if (options && options.refetch) {
-      const tokenCache = tokenCacheHandler(clientProvider, sessionStore)(req, res);
-      const { accessToken } = await tokenCache.getAccessToken();
-      if (!accessToken) {
-        throw new Error('No access token available to refetch the profile');
-      }
+      const { tokenSet } = session;
 
-      const client = await clientProvider();
-      const userInfo = await client.userinfo(accessToken);
+      const client = await getClient();
+      const userInfo = await client.userinfo(tokenSet);
 
-      const updatedUser = {
+      session.user = {
         ...session.user,
         ...userInfo
       };
 
-      await sessionStore.save(req, res, {
-        ...session,
-        user: updatedUser
-      });
-
-      res.json(updatedUser);
+      res.json(session.user);
       return;
     }
 

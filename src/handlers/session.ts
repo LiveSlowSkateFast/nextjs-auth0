@@ -1,14 +1,12 @@
 import { IncomingMessage } from 'http';
+import { Session, SessionCache } from '../auth0-session';
 
-import { ISession } from '../session/session';
-import { ISessionStore } from '../session/store';
-
-export default function sessionHandler(sessionStore: ISessionStore) {
-  return (req: IncomingMessage): Promise<ISession | null | undefined> => {
+export default function sessionHandler(sessionCache: SessionCache) {
+  return (req: IncomingMessage): Session | null | undefined => {
     if (!req) {
       throw new Error('Request is not available');
     }
 
-    return sessionStore.read(req);
+    return sessionCache.get(req);
   };
 }
